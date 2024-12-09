@@ -12,7 +12,7 @@ contract DZapCollection is ERC721, ERC721Enumerable, ERC721URIStorage, Ownable {
     string public baseURI;
     uint256 public maxSupply = 100000;
 
-    constructor() ERC721("DZapCollection", "MTK") Ownable(msg.sender) {}
+    constructor() ERC721("DZapCollection", "DZP") Ownable(msg.sender) {}
 
 
     function _baseURI() internal pure override returns (string memory) {
