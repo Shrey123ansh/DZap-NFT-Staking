@@ -86,7 +86,7 @@
                     owner: msg.sender,
                     tokenId: uint24(tokenId),
                     stakedTime: uint256(block.timestamp),
-                    lastClaimAt: 0,
+                    lastClaimAt: block.timestamp,
                     unstakedTime: 0,
                     debtClaim:0
                 });
