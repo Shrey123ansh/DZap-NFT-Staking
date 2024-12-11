@@ -12,13 +12,11 @@
     contract NFTStaking is Ownable, Pausable {
 
         using SafeMath for uint256;
-
+        
         uint256 public totalStaked;
         uint256 public rewardPerBlock;
         uint256 public unbondingPeriod;
         uint256 public rewardDelay;
-        uint256 public lastClaimAt;
-        uint256 public lastRewardBlock;
         uint256 public accRewardPerShare;
         
         //hold the owner, token, and earning values of stake
@@ -28,6 +26,7 @@
             uint256 stakedTime;
             uint256 unstakedTime;
             uint256 lastClaimAt;
+            uint256 debtClaim;
         }
 
         event NFTStaked(address indexed owner, uint256 tokenId, uint256 value);
@@ -41,6 +40,7 @@
         // map for stake to  tokenId
         mapping(uint256 => Stake) public vault;
         mapping(address => uint256[]) private userTokens;
+        mapping(uint256 => uint256) private tokenInfo;
 
         constructor(
             DZapCollection _nft,
@@ -54,29 +54,24 @@
             rewardPerBlock = _rewardPerBlock;
             unbondingPeriod = _unbondingPeriod;
             rewardDelay = _rewardDelay;
-            lastRewardBlock = block.timestamp;
             accRewardPerShare = 0;
         }
 
         // Update rewards for all staked NFTs
-        function updatePool() internal {
-            if (block.timestamp <= lastRewardBlock) {
-                return;
-            }
-
-            uint256 blocks = block.timestamp.sub(lastRewardBlock);
-            if (totalStaked > 0) {
-                uint256 rewards = blocks.mul(rewardPerBlock);
-                accRewardPerShare = accRewardPerShare.add(rewards);
-            }
-            lastRewardBlock = block.timestamp;
+        function MassupdatePool() internal {
+          for (uint256 i = 0; i < totalStaked; i++) {
+              uint256 tokenId = tokenInfo[i];
+              Stake storage staked = vault[tokenId];
+              
+              uint256 pending = (block.timestamp.sub(staked.lastClaimAt)).mul(rewardPerBlock);
+              staked.debtClaim = staked.debtClaim.add(pending);
+              staked.lastClaimAt = block.timestamp;
+          }
         }
 
         /// @notice stake one or more NFTs.
         /// @param tokenIds NFT  token IDs to stake.
         function staking(uint256[] calldata tokenIds) external whenNotPaused {
-            updatePool();
-
             for (uint256 i = 0; i < tokenIds.length; i++) {
                 uint256 tokenId = tokenIds[i];
 
@@ -85,19 +80,24 @@
 
                 nft.transferFrom(msg.sender, address(this), tokenId);
                 userTokens[msg.sender].push(tokenId);
+                
 
                 vault[tokenId] = Stake({
                     owner: msg.sender,
                     tokenId: uint24(tokenId),
                     stakedTime: uint256(block.timestamp),
                     lastClaimAt: 0,
-                    unstakedTime: 0
+                    unstakedTime: 0,
+                    debtClaim:0
                 });
+
+                totalStaked = totalStaked.add(1);
+                tokenInfo[totalStaked] = tokenId;
 
                 emit NFTStaked(msg.sender, tokenId, block.timestamp);
             }
 
-            totalStaked = totalStaked.add(tokenIds.length);
+            
         }
 
         /// @notice Unstake single nft, initiatialize the unbonding period.
@@ -125,7 +125,6 @@
         /// @notice  claim based on delay after you unstaked.
         /// @param tokenIds NFT token IDs  for claim.
         function claim(uint256[] calldata tokenIds) external whenNotPaused {
-            updatePool();
 
             uint256 totalRewards = 0;
             for (uint256 i = 0; i < tokenIds.length; i++) {
@@ -134,17 +133,18 @@
                 // require(staked.owner == msg.sender, "Not the owner");
                 require(block.timestamp >= staked.lastClaimAt + rewardDelay, "claim again after delay period");
 
-                uint256 currentAccRewardPerShare = accRewardPerShare;
+                uint256 currentAccRewardPerShare = staked.debtClaim;
 
                     if (staked.unstakedTime > 0 && block.timestamp > staked.unstakedTime + unbondingPeriod) {
                         revert("please withdraw your nft");
                     }else{
-                            uint256 blocks = block.timestamp.sub(lastRewardBlock);
+                            uint256 blocks = block.timestamp.sub(staked.lastClaimAt);
                             uint256 rewards = blocks.mul(rewardPerBlock);
                             currentAccRewardPerShare = currentAccRewardPerShare.add(rewards);
                     }
 
                     uint256 pendings = currentAccRewardPerShare;
+                    staked.debtClaim = 0;
                     staked.lastClaimAt = uint256(block.timestamp);
                     totalRewards = totalRewards.add(pendings);
                     token.mint(staked.owner, totalRewards);
@@ -170,22 +170,22 @@
                 
                 nft.transferFrom(address(this), msg.sender, tokenId);
 
-                uint256 currentAccRewardPerShare = accRewardPerShare;
-                if(staked.unstakedTime + unbondingPeriod > lastRewardBlock){
+                    uint256 currentAccRewardPerShare = staked.debtClaim;
                     uint256 timespan = staked.unstakedTime + unbondingPeriod;
-                    uint256 blocks = timespan.sub(lastRewardBlock);
+                    uint256 blocks = timespan.sub(staked.lastClaimAt);
                     uint256 rewards = blocks.mul(rewardPerBlock);
                     currentAccRewardPerShare = currentAccRewardPerShare.add(rewards);
                     uint256 pendings = currentAccRewardPerShare;
                     totalRewards = totalRewards.add(pendings);
-                }
+                    delete vault[tokenId];
+                    _removeUserToken(msg.sender, tokenId);
             }
             totalStaked = totalStaked.sub(tokenIds.length);
             token.mint(msg.sender, totalRewards);
         }
 
         function set() external onlyOwner {
-            updatePool();
+            MassupdatePool();
         }
 
         function _removeUserToken(address user, uint256 tokenId) internal {
@@ -221,7 +221,8 @@
 
         /// @notice Update  reward per block (Owner).
         function setRewardPerBlock(uint256 _rewardPerBlock) external onlyOwner {
-            updatePool();
+            MassupdatePool();
+
             rewardPerBlock = _rewardPerBlock;
         }
 
